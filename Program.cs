@@ -1,5 +1,10 @@
 ﻿var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddOptions<OpenAIOptions>().Bind(builder.Configuration.GetSection(OpenAIOptions.Section));
+
+builder.Configuration.AddUserSecrets<Program>(optional: true);
+
+builder.Services.AddOptions<OpenAIOptions>()
+    .Bind(builder.Configuration.GetSection(OpenAIOptions.Section));
+
 builder.Services.AddKeyedSingleton<IWhisperService, WhisperService>("openai");
 builder.Services.AddKeyedSingleton<IWhisperService, LocalWhisperService>("local");
 
