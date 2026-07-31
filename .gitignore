@@ -4,7 +4,10 @@
 ## Get latest from `dotnet new gitignore`
 
 appsettings*.json
+!appsettings.example.json
 ggml-base.bin
+models/
+*.bin.partial
 
 # dotenv files
 .env

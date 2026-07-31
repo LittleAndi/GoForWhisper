@@ -1,67 +1,124 @@
-using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
 using Whisper.net;
-using Whisper.net.Ggml;
+using Whisper.net.LibraryLoader;
 
 namespace Services;
 
 public interface IWhisperService
 {
-    Task SpeechToText(string file, string language, CancellationToken cancellationToken = default);
+    Task SpeechToText(
+        string file,
+        string language,
+        TranscriptOptions output,
+        CancellationToken cancellationToken = default);
 }
 
 public class WhisperService(IOptions<OpenAIOptions> options) : IWhisperService
 {
     private readonly OpenAIOptions options = options.Value;
 
-    public async Task SpeechToText(string file, string language, CancellationToken cancellationToken = default)
+    public async Task SpeechToText(
+        string file,
+        string language,
+        TranscriptOptions output,
+        CancellationToken cancellationToken = default)
     {
         OpenAIClient openAIClient = new(options.ApiKey);
 
         var client = openAIClient.GetAudioClient(options.Model);
-        var result = await client.TranscribeAudioAsync(file, options: new OpenAI.Audio.AudioTranscriptionOptions { Language = language });
-        System.Console.WriteLine(result.Value.Text);
+        var result = await client.TranscribeAudioAsync(
+            file,
+            options: new OpenAI.Audio.AudioTranscriptionOptions
+            {
+                // The API wants an ISO-639-1 code; null means auto-detect.
+                // "auto" is a whisper.cpp convention and is not accepted here.
+                Language = NormalizeLanguage(language),
+                Temperature = 0f,
+            });
+
+        using var sink = TranscriptSink.Create(output.OutputPath);
+
+        // This path returns one flat string, so there are no segment times to
+        // print even when --timestamps is asked for.
+        sink.Write(result.Value.Text, TimeSpan.Zero);
     }
+
+    private static string? NormalizeLanguage(string language) =>
+        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : language;
 }
 
-public class LocalWhisperService() : IWhisperService
+public class LocalWhisperService(IOptions<LocalWhisperOptions> options) : IWhisperService
 {
-    const string modelName = "ggml-base.bin";
-    public async Task SpeechToText(string file, string language = "auto", CancellationToken cancellationToken = default)
+    private readonly LocalWhisperOptions options = options.Value;
+
+    public async Task SpeechToText(
+        string file,
+        string language,
+        TranscriptOptions output,
+        CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(modelName))
+        var modelPath = await WhisperModelProvider.EnsureModelAsync(options, cancellationToken);
+
+        var audio = AudioPreprocessor.Prepare(file, options);
+
+        using var whisperFactory = WhisperFactory.FromPath(modelPath);
+        Console.Error.WriteLine($"Whisper runtime: {RuntimeOptions.LoadedLibrary}");
+
+        using var processor = BuildProcessor(whisperFactory, language);
+        using var sink = TranscriptSink.Create(output.OutputPath);
+
+        await foreach (var segment in processor.ProcessAsync(audio.Samples, cancellationToken))
         {
-            using var modelStream = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(GgmlType.Base, cancellationToken: cancellationToken);
-            using var fileWriter = File.OpenWrite(modelName);
-            await modelStream.CopyToAsync(fileWriter, cancellationToken);
+            var start = segment.Start + audio.Offset;
+            var end = segment.End + audio.Offset;
+            var text = segment.Text.Trim();
+
+            sink.Write(
+                output.Timestamps
+                    ? $"[{start:hh\\:mm\\:ss\\.fff} --> {end:hh\\:mm\\:ss\\.fff}] {text}"
+                    : text,
+                end);
+        }
+    }
+
+    private WhisperProcessor BuildProcessor(WhisperFactory factory, string language)
+    {
+        var builder = factory.CreateBuilder()
+            .WithLanguage(ResolveLanguage(language))
+            .WithThreads(options.Threads)
+            // Temperature 0 with a fallback ladder: retry hotter only when a
+            // decode fails the entropy/logprob checks below.
+            .WithTemperature(0f)
+            .WithTemperatureInc(0.2f)
+            .WithEntropyThreshold(2.4f)
+            .WithLogProbThreshold(-1.0f)
+            .WithNoSpeechThreshold(0.6f);
+
+        if (options.NoContext)
+        {
+            builder = builder.WithNoContext();
         }
 
-        using var whisperFactory = WhisperFactory.FromPath(modelName);
+        if (!string.IsNullOrWhiteSpace(options.Prompt))
+        {
+            builder = builder.WithPrompt(options.Prompt);
+        }
 
-        using var processor = whisperFactory.CreateBuilder()
-            // .WithSegmentEventHandler(OnNewSegment)
-            //.WithTranslate()
-            .WithLanguage(language)
+        return builder
+            .WithBeamSearchSamplingStrategy(beamSearch => beamSearch
+                .WithBeamSize(options.BeamSize)
+                .WithPatience(options.Patience))
             .Build();
-
-        using var filestream = File.OpenRead(file);
-        using var wavStream = new MemoryStream();
-        using var reader = new Mp3FileReader(filestream);
-        var resampler = new WdlResamplingSampleProvider(reader.ToSampleProvider(), 16000);
-        WaveFileWriter.WriteWavFileToStream(wavStream, resampler.ToWaveProvider16());
-
-        wavStream.Seek(0, SeekOrigin.Begin);
-
-        var result = processor.ProcessAsync(wavStream, cancellationToken);
-        await foreach (var segment in result)
-        {
-            Console.WriteLine($"CSSS {segment.Start} ==> {segment.End} : {segment.Text}");
-        }
-
     }
 
-    private static void OnNewSegment(SegmentData e)
-    {
-        Console.WriteLine($"CSSS {e.Start} ==> {e.End} : {e.Text}");
-    }
+    /// <summary>
+    /// The configured language wins unless the caller asked for something
+    /// specific — kb-whisper is Swedish-only, so defaulting to detection
+    /// would only invite mis-detection.
+    /// </summary>
+    private string ResolveLanguage(string language) =>
+        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? options.Language
+            : language;
 }
