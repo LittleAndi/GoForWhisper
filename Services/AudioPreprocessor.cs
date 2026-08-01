@@ -39,13 +39,50 @@ public static class AudioPreprocessor
             source = new MonoMixSampleProvider(source);
         }
 
-        if (source.WaveFormat.SampleRate != TargetSampleRate)
+        // Held so the resampler, which owns unmanaged Media Foundation state,
+        // is released once the samples have been read.
+        MediaFoundationResampler? resampler = null;
+        try
         {
-            source = new WdlResamplingSampleProvider(source, TargetSampleRate);
+            if (source.WaveFormat.SampleRate != TargetSampleRate)
+            {
+                (source, resampler) = Resample(source);
+            }
+
+            return Prepare(ReadAll(source), options);
         }
+        finally
+        {
+            resampler?.Dispose();
+        }
+    }
 
-        var samples = ReadAll(source);
+    /// <summary>
+    /// Resamples to 16 kHz through Media Foundation.
+    /// <para>
+    /// NAudio's <c>WdlResamplingSampleProvider</c> is the obvious choice here and
+    /// is what this used to use, but its 44.1 kHz to 16 kHz conversion rolls the
+    /// top octave off hard — measured 8.7 dB down in the 6.5-8 kHz band against
+    /// the same file decoded by ffmpeg. Whisper is unbothered, but that band
+    /// carries much of what distinguishes one voice from another, and speaker
+    /// diarization collapsed to a single cluster because of it. Do not swap this
+    /// back without re-running the diarization check in the README.
+    /// </para>
+    /// </summary>
+    private static (ISampleProvider Source, MediaFoundationResampler Resampler) Resample(
+        ISampleProvider source)
+    {
+        var target = WaveFormat.CreateIeeeFloatWaveFormat(TargetSampleRate, 1);
+        var resampler = new MediaFoundationResampler(new SampleToWaveProvider(source), target)
+        {
+            ResamplerQuality = 60, // Media Foundation's maximum.
+        };
 
+        return (resampler.ToSampleProvider(), resampler);
+    }
+
+    private static PreparedAudio Prepare(List<float> samples, LocalWhisperOptions options)
+    {
         var (start, end) = options.TrimSilence
             ? FindSpeechBounds(samples)
             : (0, samples.Count);

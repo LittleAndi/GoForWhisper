@@ -36,6 +36,12 @@ public class WhisperService(IOptions<OpenAIOptions> options) : IWhisperService
                 Temperature = 0f,
             });
 
+        if (output.Diarize)
+        {
+            Console.Error.WriteLine(
+                "Warning: --diarize is not available on the OpenAI path; use LocalSpeechToText.");
+        }
+
         using var sink = TranscriptSink.Create(output.OutputPath);
 
         // This path returns one flat string, so there are no segment times to
@@ -49,7 +55,9 @@ public class WhisperService(IOptions<OpenAIOptions> options) : IWhisperService
             : language;
 }
 
-public class LocalWhisperService(IOptions<LocalWhisperOptions> options) : IWhisperService
+public class LocalWhisperService(
+    IOptions<LocalWhisperOptions> options,
+    SpeakerDiarizer diarizer) : IWhisperService
 {
     private readonly LocalWhisperOptions options = options.Value;
 
@@ -70,6 +78,13 @@ public class LocalWhisperService(IOptions<LocalWhisperOptions> options) : IWhisp
 
         var audio = AudioPreprocessor.Prepare(file, options);
 
+        // Diarization runs first: it is a separate pass over the same samples,
+        // and knowing the turns up front means the transcript can be labelled as
+        // it streams rather than buffered and rewritten afterwards.
+        var labeler = output.Diarize
+            ? new SpeakerLabeler(await diarizer.DiarizeAsync(audio, output.Speakers, cancellationToken))
+            : null;
+
         using var whisperFactory = WhisperFactory.FromPath(modelPath);
         Console.Error.WriteLine($"Whisper runtime: {RuntimeOptions.LoadedLibrary}");
 
@@ -81,6 +96,11 @@ public class LocalWhisperService(IOptions<LocalWhisperOptions> options) : IWhisp
             var start = segment.Start + audio.Offset;
             var end = segment.End + audio.Offset;
             var text = segment.Text.Trim();
+
+            if (labeler is not null)
+            {
+                text = $"{SpeakerLabeler.Format(labeler.Resolve(start, end))}: {text}";
+            }
 
             sink.Write(
                 output.Timestamps

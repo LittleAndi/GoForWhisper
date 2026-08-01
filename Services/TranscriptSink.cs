@@ -4,7 +4,16 @@ namespace Services;
 
 /// <param name="OutputPath">File to write to; stdout when null or empty.</param>
 /// <param name="Timestamps">Prefix each line with its time range.</param>
-public sealed record TranscriptOptions(string? OutputPath = null, bool Timestamps = false);
+/// <param name="Diarize">Label each line with the speaker it belongs to.</param>
+/// <param name="Speakers">
+/// Known speaker count. Zero lets the diarizer decide; ignored unless
+/// <paramref name="Diarize"/> is set.
+/// </param>
+public sealed record TranscriptOptions(
+    string? OutputPath = null,
+    bool Timestamps = false,
+    bool Diarize = false,
+    int Speakers = 0);
 
 /// <summary>
 /// Writes transcript lines to a file or stdout. When the destination is a file
