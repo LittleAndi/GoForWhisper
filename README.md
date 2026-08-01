@@ -146,12 +146,29 @@ printed to stderr on each run:
 Whisper runtime: Vulkan
 ```
 
-`Whisper.net.Runtime.Cuda12.Windows` ships `ggml-cuda-whisper.dll` but still needs
-the CUDA runtime libraries (`cudart64_12.dll`, `cublas64_12.dll`) from the CUDA
-Toolkit. Without the toolkit installed the CUDA backend is skipped and Vulkan is
-used instead — which works, just typically slower than CUDA. Installing **CUDA
-Toolkit 12.8 or newer** (12.8+ is required for Blackwell / RTX 50-series, compute
-capability sm_120) makes the CUDA backend load automatically; no code change needed.
+CUDA requires **CUDA Toolkit 13.x**. `Whisper.net.Runtime.Cuda.Windows` 1.9.1 links
+against `cudart64_13.dll` and `cublas64_13.dll`, so a CUDA 12.x toolkit will not
+satisfy it no matter how recent — the backend is silently skipped and Vulkan is
+used instead. Installing the 13.x toolkit puts those DLLs on `PATH` and the CUDA
+backend then loads with no code change:
+
+```powershell
+winget install Nvidia.CUDA --version 13.3
+```
+
+Two things that are easy to get wrong here:
+
+- **The package name matters.** `Whisper.net.Runtime.Cuda12.Windows` deploys to
+  `runtimes/cuda12/win-x64`, but the loader only ever looks in
+  `runtimes/cuda/win-x64` (the directory is derived from the `RuntimeLibrary` enum
+  name). Referencing the `Cuda12` variant means the loader never sees it at all.
+- **A partial CUDA install crashes rather than falling back.** If `cudart` is
+  resolvable but `cublas` is not, the managed availability probe succeeds, the
+  native load then fails, and ggml aborts. Either have all of `cudart64_13.dll`,
+  `cublas64_13.dll` and `cublasLt64_13.dll` reachable, or none of them.
+
+Set `LocalWhisper:Debug` to `true` to see the loader's backend decisions on
+stderr — it is the only way to find out why a backend was skipped.
 
 ## Local transcription settings
 
@@ -170,6 +187,7 @@ as `LocalWhisper__BeamSize=8`:
 | `TrimSilence` | `true` | Drops leading/trailing silence, the most common source of hallucinated filler |
 | `TargetRmsDbfs` | `-20` | Level normalisation target; gain is capped so peaks cannot clip |
 | `Threads` | CPU count | Decoder threads |
+| `Debug` | `false` | Emit Whisper.net loader and model diagnostics on stderr |
 
 Decoding runs at temperature 0 with a fallback ladder (`TemperatureInc` 0.2) gated
 on entropy, log-probability, and no-speech thresholds, so a hotter retry only

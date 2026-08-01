@@ -1,5 +1,6 @@
 using Whisper.net;
 using Whisper.net.LibraryLoader;
+using Whisper.net.Logger;
 
 namespace Services;
 
@@ -58,6 +59,13 @@ public class LocalWhisperService(IOptions<LocalWhisperOptions> options) : IWhisp
         TranscriptOptions output,
         CancellationToken cancellationToken = default)
     {
+        if (options.Debug)
+        {
+            // Routed to stderr so diagnostics never contaminate the transcript.
+            LogProvider.AddLogger((level, message) =>
+                Console.Error.WriteLine($"[{level}] {message?.TrimEnd()}"));
+        }
+
         var modelPath = await WhisperModelProvider.EnsureModelAsync(options, cancellationToken);
 
         var audio = AudioPreprocessor.Prepare(file, options);

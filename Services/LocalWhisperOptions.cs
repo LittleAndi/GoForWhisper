@@ -52,4 +52,11 @@ public sealed class LocalWhisperOptions
     public float PeakCeiling { get; set; } = 0.98f;
 
     public int Threads { get; set; } = Environment.ProcessorCount;
+
+    /// <summary>
+    /// Emits Whisper.net's native loader and model diagnostics on stderr. The
+    /// loader silently falls back between GPU backends, so this is the only way
+    /// to see why a given backend was skipped.
+    /// </summary>
+    public bool Debug { get; set; }
 }
