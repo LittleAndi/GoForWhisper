@@ -44,6 +44,11 @@ builder.Services.AddOptions<OpenAIOptions>()
 builder.Services.AddOptions<LocalWhisperOptions>()
     .Bind(builder.Configuration.GetSection(LocalWhisperOptions.Section));
 
+builder.Services.AddOptions<DiarizationOptions>()
+    .Bind(builder.Configuration.GetSection(DiarizationOptions.Section));
+
+builder.Services.AddSingleton<SpeakerDiarizer>();
+
 builder.Services.AddKeyedSingleton<IWhisperService, WhisperService>("openai");
 builder.Services.AddKeyedSingleton<IWhisperService, LocalWhisperService>("local");
 
@@ -55,10 +60,14 @@ builder.AddCommand("OpenaiSpeechToText", async (
     IServiceProvider serviceProvider,
     [Option] string language = "auto",
     [Option] string? output = null,
-    [Option] bool timestamps = false) =>
+    [Option] bool timestamps = false,
+    [Option] bool diarize = false) =>
 {
     var whisperService = serviceProvider.GetRequiredKeyedService<IWhisperService>("openai");
-    await whisperService.SpeechToText(file, language, new TranscriptOptions(output, timestamps));
+    await whisperService.SpeechToText(
+        file,
+        language,
+        new TranscriptOptions(output, timestamps, diarize));
 });
 
 builder.AddCommand("LocalSpeechToText", async (
@@ -66,10 +75,16 @@ builder.AddCommand("LocalSpeechToText", async (
     IServiceProvider serviceProvider,
     [Option] string language = "auto",
     [Option] string? output = null,
-    [Option] bool timestamps = false) =>
+    [Option] bool timestamps = false,
+    [Option] bool diarize = false,
+    [Option] int speakers = 0) =>
 {
     var whisperService = serviceProvider.GetRequiredKeyedService<IWhisperService>("local");
-    await whisperService.SpeechToText(file, language, new TranscriptOptions(output, timestamps));
+    await whisperService.SpeechToText(
+        file,
+        language,
+        // Asking for a speaker count is only ever meant as a request to diarize.
+        new TranscriptOptions(output, timestamps, diarize || speakers > 0, speakers));
 });
 
 var app = builder.Build();
