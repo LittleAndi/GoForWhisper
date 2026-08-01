@@ -138,13 +138,33 @@ somewhere else. Useful alternatives:
 
 ## GPU acceleration
 
-The app requests backends in the order CUDA → Vulkan → CPU. Whisper.net skips any
-backend whose native library will not load, and the one actually selected is
-printed to stderr on each run:
+Backend preference is `LocalWhisper:Backends`, tried left to right; the first
+whose native library loads wins. Whisper.net skips any backend that will not
+load, and the one actually selected is printed to stderr on each run:
 
 ```text
 Whisper runtime: Vulkan
 ```
+
+**Vulkan is the default ahead of CUDA, which is deliberate.** Measured on an
+RTX 5060 Ti with kb-whisper-large, 3.7 minutes of Swedish audio, beam 5:
+
+| Backend | Wall time | Throughput |
+| --- | --- | --- |
+| **Vulkan** | 23.5 – 24.8 s | **~9.4x realtime** |
+| CUDA | 27.0 – 28.0 s | ~8.0x realtime |
+
+Vulkan is ~15% faster here because ggml's Vulkan backend uses cooperative-matrix
+instructions (`NV_coopmat2`) on Blackwell. This ranking is hardware-dependent —
+measure on your own GPU rather than assuming CUDA wins:
+
+```powershell
+$env:LocalWhisper__Backends__0="Cuda"    # force one backend for a timing run
+```
+
+Backend choice does not affect accuracy. Each backend is deterministic across
+runs, and across backends the transcripts were word-identical — differing only
+in where one segment boundary fell, from floating-point accumulation order.
 
 CUDA requires **CUDA Toolkit 13.x**. `Whisper.net.Runtime.Cuda.Windows` 1.9.1 links
 against `cudart64_13.dll` and `cublas64_13.dll`, so a CUDA 12.x toolkit will not
@@ -188,6 +208,7 @@ as `LocalWhisper__BeamSize=8`:
 | `TargetRmsDbfs` | `-20` | Level normalisation target; gain is capped so peaks cannot clip |
 | `Threads` | CPU count | Decoder threads |
 | `Debug` | `false` | Emit Whisper.net loader and model diagnostics on stderr |
+| `Backends` | `["Vulkan","Cuda","Cpu"]` | Backend preference order; see [GPU acceleration](#gpu-acceleration) |
 
 Decoding runs at temperature 0 with a fallback ladder (`TemperatureInc` 0.2) gated
 on entropy, log-probability, and no-speech thresholds, so a hotter retry only

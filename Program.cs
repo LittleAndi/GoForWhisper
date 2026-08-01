@@ -1,14 +1,38 @@
 using Whisper.net.LibraryLoader;
 
-// Prefer CUDA, fall back to Vulkan, then CPU. Whisper.net probes these in order
-// and skips any runtime whose native library will not load, so a CUDA build
-// without an sm_120 target on Blackwell degrades to Vulkan instead of failing.
-RuntimeOptions.RuntimeLibraryOrder =
-[
-    RuntimeLibrary.Cuda,
-    RuntimeLibrary.Vulkan,
-    RuntimeLibrary.Cpu,
-];
+// Touching RuntimeOptions runs Whisper.net's static backend probe, which loads
+// a native library immediately — so the preference order has to be set before
+// anything else reaches into Whisper.net. That means reading configuration here,
+// ahead of the host, rather than from LocalWhisperOptions.
+var bootstrap = new ConfigurationBuilder()
+    .SetBasePath(Directory.GetCurrentDirectory())
+    .AddJsonFile("appsettings.json", optional: true)
+    .AddEnvironmentVariables()
+    .Build();
+
+var backends = bootstrap.GetSection($"{LocalWhisperOptions.Section}:Backends").Get<string[]>()
+    ?? new LocalWhisperOptions().Backends;
+
+if (backends is { Length: > 0 })
+{
+    var order = new List<RuntimeLibrary>();
+    foreach (var name in backends)
+    {
+        if (Enum.TryParse<RuntimeLibrary>(name, ignoreCase: true, out var library))
+        {
+            order.Add(library);
+        }
+        else
+        {
+            Console.Error.WriteLine($"Unknown backend '{name}' ignored.");
+        }
+    }
+
+    if (order.Count > 0)
+    {
+        RuntimeOptions.RuntimeLibraryOrder = order;
+    }
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 

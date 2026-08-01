@@ -59,4 +59,18 @@ public sealed class LocalWhisperOptions
     /// to see why a given backend was skipped.
     /// </summary>
     public bool Debug { get; set; }
+
+    /// <summary>
+    /// Backend preference order, tried left to right; the first one whose native
+    /// library loads wins. Values are <c>RuntimeLibrary</c> names (Cuda, Vulkan,
+    /// Cpu, CoreML, OpenVino, CpuNoAvx).
+    /// <para>
+    /// Vulkan leads deliberately: on an RTX 5060 Ti it measured ~15% faster than
+    /// CUDA on kb-whisper-large (9.4x vs 8.0x realtime), because ggml's Vulkan
+    /// backend uses cooperative-matrix instructions on Blackwell. That ranking is
+    /// hardware-dependent — measure before assuming it holds elsewhere.
+    /// </para>
+    /// Read in Program.cs before the host is built, not through this type.
+    /// </summary>
+    public string[] Backends { get; set; } = ["Vulkan", "Cuda", "Cpu"];
 }
